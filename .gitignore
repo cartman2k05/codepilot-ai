@@ -1,0 +1,31 @@
+# Environments
+.env
+.env.local
+backend/.env
+frontend/.env
+
+# Node
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.pytest_cache/
+
+# Databases
+*.db
+*.db-journal
+*.sqlite
+
+# IDEs & System
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
