@@ -82,8 +82,8 @@ class ReviewService:
                 parse_results["code"] = code
                 parsed_files_data.append(parse_results)
                 
-                # Static analysis (Semgrep / Regex fallback)
-                findings = await static_analyzer.run_semgrep(code, detected_lang, filename)
+                # Pattern-based static analysis
+                findings = await static_analyzer.run_pattern_scan(code, detected_lang, filename)
                 for f in findings:
                     f["file_id"] = db_file.id
                     f["filename"] = filename

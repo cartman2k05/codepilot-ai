@@ -25,7 +25,7 @@ async def parse_code_node(state: ReviewState) -> Dict:
 async def static_analysis_node(state: ReviewState) -> Dict:
     static_findings = []
     for pf in state.get("parsed_files", []):
-        findings = await static_analyzer.run_semgrep(pf["content"], pf["language"], pf["filename"])
+        findings = await static_analyzer.run_pattern_scan(pf["content"], pf["language"], pf["filename"])
         static_findings.extend(findings)
         
     return {"static_findings": static_findings}

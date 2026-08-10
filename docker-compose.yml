@@ -1,16 +1,26 @@
 # ============================================================
-# CodePilot AI — Docker Compose
+# CodePilot AI — Docker Compose (Local Development)
 # ============================================================
 # Usage:
 #   docker-compose up --build        # Start all services
 #   docker-compose up -d             # Start in background
 #   docker-compose down -v           # Stop and remove volumes
+#
+# Production deployment uses split managed platforms:
+#   Database  → Neon (free serverless Postgres)
+#   Memory    → Hindsight Cloud (https://hindsight.vectorize.io)
+#   Backend   → Render or Railway (Docker web service)
+#   Frontend  → Vercel
+#
+# Redis and self-hosted Hindsight are NOT needed — the backend
+# never touches Redis directly, and Hindsight Cloud replaces
+# the local container.
 # ============================================================
 
 version: "3.9"
 
 services:
-  # ── PostgreSQL 16 ──────────────────────────────────────────
+  # ── PostgreSQL 16 (local dev only — use Neon in production) ──
   postgres:
     image: postgres:16-alpine
     container_name: codepilot-postgres
@@ -32,38 +42,6 @@ services:
     networks:
       - codepilot-network
 
-  # ── Redis 7 ────────────────────────────────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: codepilot-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
-    networks:
-      - codepilot-network
-
-  # ── Hindsight (Persistent Memory Server) ───────────────────
-  hindsight:
-    image: ghcr.io/vectorize-io/hindsight:latest
-    container_name: codepilot-hindsight
-    restart: unless-stopped
-    ports:
-      - "8888:8888"
-    environment:
-      LLM_PROVIDER: groq
-      LLM_API_KEY: ${GROQ_API_KEY}
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - codepilot-network
-
   # ── Backend (FastAPI + LangGraph) ──────────────────────────
   backend:
     build:
@@ -74,23 +52,21 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # In production, set DATABASE_URL to your Neon connection string
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://codepilot:codepilot@postgres:5432/codepilot}
       GROQ_API_KEY: ${GROQ_API_KEY}
-      HINDSIGHT_URL: ${HINDSIGHT_URL:-http://hindsight:8888}
+      # In production, point at Hindsight Cloud and set HINDSIGHT_API_KEY
+      HINDSIGHT_URL: ${HINDSIGHT_URL:-https://api.hindsight.vectorize.io}
+      HINDSIGHT_API_KEY: ${HINDSIGHT_API_KEY:-}
+      # In production, set JWT_SECRET to a strong random value: openssl rand -hex 32
       JWT_SECRET: ${JWT_SECRET:-change-this-to-a-secure-random-string-in-production}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
-      CASCADEFLOW_BUDGET: ${CASCADEFLOW_BUDGET:-1.0}
-      CASCADEFLOW_MODE: ${CASCADEFLOW_MODE:-enforce}
+      # In production, set CORS_ORIGINS to your Vercel frontend URL
       CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000"]}
     depends_on:
       postgres:
         condition: service_healthy
-      hindsight:
-        condition: service_started
-    volumes:
-      - ./backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     networks:
       - codepilot-network
 
@@ -104,6 +80,7 @@ services:
     ports:
       - "3000:3000"
     environment:
+      # In production (Vercel), set NEXT_PUBLIC_API_URL to your Render/Railway backend URL
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     depends_on:
       - backend

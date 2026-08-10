@@ -9,7 +9,10 @@ class MemoryService:
     def __init__(self):
         self.client = None
         try:
-            self.client = Hindsight(base_url=settings.HINDSIGHT_URL)
+            self.client = Hindsight(
+                base_url=settings.HINDSIGHT_URL,
+                api_key=settings.HINDSIGHT_API_KEY or None,
+            )
         except Exception as e:
             logger.error(f"Failed to initialize Hindsight client: {e}")
 

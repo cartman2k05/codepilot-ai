@@ -27,7 +27,7 @@ Under the hood, CodePilot AI employs **CascadeFlow**, a confidence-based model r
 - ⚡ **Smart Model Routing via CascadeFlow** — Confidence-based escalation routes simple reviews through cheap models and complex ones through powerful models
 - 🏗️ **Team Knowledge Graph** — Structured repository profiles that capture frameworks, conventions, patterns, and avoided tools
 - 📊 **Scored Reports** — Every review generates an overall score plus 6 category scores (correctness, security, performance, style, testing, documentation)
-- 🔍 **Static Analysis** — Built-in Tree-sitter parsing and Semgrep rule integration for structural and security analysis
+- 🔍 **Static Analysis** — Tree-sitter AST parsing and pattern-based regex security rules (SQL injection, hardcoded secrets, eval/exec, shell injection)
 - 💰 **Cost Dashboard** — Real-time tracking of routing decisions, model usage, and cumulative savings from smart routing
 - 📈 **Memory Evolution** — Visual timeline showing how the AI's understanding of your team grows over time
 - 🎯 **Feedback Loop** — Accept, reject, or ignore every suggestion — each action refines the AI's future recommendations
@@ -42,11 +42,10 @@ Under the hood, CodePilot AI employs **CascadeFlow**, a confidence-based model r
 graph LR
     A["🖥️ Next.js Frontend"] -->|REST API| B["⚡ FastAPI Backend"]
     B -->|Orchestration| C["🔄 LangGraph Workflow"]
-    C -->|retain / recall| D["🧠 Hindsight"]
-    C -->|route / escalate| E["📊 CascadeFlow"]
+    C -->|retain / recall| D["🧠 Hindsight Cloud"]
+    C -->|confidence routing| E["📊 Model Router"]
     E -->|inference| F["🤖 Groq LLMs"]
-    B -->|persist| G["🗄️ PostgreSQL"]
-    D -->|cache| H["⚡ Redis"]
+    B -->|persist| G["🗄️ Neon (Postgres)"]
 
     style A fill:#0070f3,stroke:#0051a8,color:#fff
     style B fill:#009688,stroke:#00796b,color:#fff
@@ -55,7 +54,6 @@ graph LR
     style E fill:#ef4444,stroke:#dc2626,color:#fff
     style F fill:#10b981,stroke:#059669,color:#fff
     style G fill:#3b82f6,stroke:#2563eb,color:#fff
-    style H fill:#ec4899,stroke:#db2777,color:#fff
 ```
 
 ### LangGraph Review Workflow
@@ -87,11 +85,12 @@ graph TD
 |---|---|---|
 | **Frontend** | Next.js 14, React 18, Tailwind CSS, ShadcnUI | App Router, server components, responsive UI |
 | **Backend** | FastAPI, Pydantic v2, SQLAlchemy 2.0 | Async REST API, data validation, ORM |
-| **AI / ML** | LangGraph, Groq SDK, Tree-sitter, Semgrep | Workflow orchestration, LLM inference, static analysis |
-| **Memory** | Hindsight, Redis | Persistent memory engine, caching layer |
-| **Routing** | CascadeFlow | Confidence-based model selection and cost optimization |
-| **Database** | PostgreSQL 16 | Reviews, users, feedback, audit logs |
-| **Infrastructure** | Docker Compose, GitHub Actions | Containerized deployment, CI/CD |
+| **AI / ML** | LangGraph, Groq SDK, Tree-sitter | Workflow orchestration, LLM inference, AST parsing |
+| **Memory** | Hindsight Cloud | Persistent, hosted vector memory — no self-hosted container needed |
+| **Routing** | CodePilot confidence/complexity heuristics | Drafter (Llama 8B) → Flagship (Llama 70B) escalation |
+| **Static Analysis** | Pattern-based regex security rules | SQL injection, hardcoded secrets, eval/exec, shell injection |
+| **Database** | Neon (serverless Postgres) | Reviews, users, feedback, audit logs |
+| **Infrastructure** | Docker Compose (local dev), Vercel, Render | Local development, frontend and backend hosting |
 
 ---
 
@@ -99,10 +98,11 @@ graph TD
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
+- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) (for local dev)
 - A [Groq API key](https://console.groq.com/) (free tier available)
+- A [Hindsight Cloud API key](https://hindsight.vectorize.io) (free tier available)
 
-### Launch
+### Local Development
 
 ```bash
 # 1. Clone the repository
@@ -111,9 +111,9 @@ cd codepilot-ai
 
 # 2. Configure environment
 cp .env.example .env
-# Edit .env and add your GROQ_API_KEY
+# Edit .env — set GROQ_API_KEY and HINDSIGHT_API_KEY at minimum
 
-# 3. Build and start all services
+# 3. Build and start services (postgres + backend + frontend)
 docker-compose up --build
 
 # 4. Open the app
@@ -123,6 +123,15 @@ docker-compose up --build
 
 > [!TIP]
 > First-time build may take 3–5 minutes. Subsequent starts are near-instant thanks to Docker layer caching.
+
+### Production Deployment
+
+| Service | Platform | Notes |
+|---------|----------|-------|
+| Frontend | [Vercel](https://vercel.com) | Set `NEXT_PUBLIC_API_URL` to your backend URL |
+| Backend | [Render](https://render.com) or [Railway](https://railway.app) | Deploy as Docker web service; set all env vars |
+| Database | [Neon](https://neon.tech) | Free serverless Postgres; use the `postgresql+asyncpg://` connection string |
+| Memory | [Hindsight Cloud](https://hindsight.vectorize.io) | Free hosted API; set `HINDSIGHT_API_KEY` and `HINDSIGHT_URL` |
 
 ---
 
@@ -261,9 +270,9 @@ Over time, the AI builds a comprehensive profile of your team's conventions, pro
 
 ---
 
-## How CascadeFlow Works
+## How Model Routing Works
 
-CascadeFlow is a **confidence-based model routing** system that optimizes cost without sacrificing quality.
+CodePilot AI uses a **confidence-based model routing** system that optimizes cost without sacrificing quality. The routing logic lives in `routing_service.py` and scores each submission using static heuristics before a single token is sent to a model.
 
 ### Decision Flow
 
@@ -272,20 +281,19 @@ CascadeFlow is a **confidence-based model routing** system that optimizes cost w
 │                                                              │
 │   Code Submitted                                             │
 │       ↓                                                      │
-│   Llama 8B generates review              cost: ~$0.003       │
+│   Complexity scored (line count, structure, security pats.)  │
 │       ↓                                                      │
-│   Confidence Score calculated                                │
-│       ↓                                                      │
-│   ┌─────────────────────┐                                    │
-│   │ Confidence ≥ 0.80?  │                                    │
-│   └─────────┬───────────┘                                    │
-│         YES │         NO                                     │
+│   ┌─────────────────────────┐                                │
+│   │ Complexity score > 60?  │                                │
+│   └─────────┬───────────────┘                                │
+│         NO  │         YES                                    │
 │             ↓           ↓                                    │
-│   ✅ Use 8B result   🔬 Escalate to Llama 70B               │
-│      (done!)            cost: ~$0.014                        │
-│                         ↓                                    │
-│                   ✅ Use 70B result                           │
-│                      (higher accuracy)                       │
+│   Llama 8B (Drafter)   Llama 70B (Flagship)                 │
+│   cost: ~$0.003         cost: ~$0.014                        │
+│       ↓                                                      │
+│   Confidence check: if < 0.80 → escalate to 70B             │
+│       ↓                                                      │
+│   ✅ Final review output                                      │
 │                                                              │
 │   Average savings: 78% per review                            │
 │                                                              │
@@ -294,8 +302,8 @@ CascadeFlow is a **confidence-based model routing** system that optimizes cost w
 
 ### Why It Works
 
-| Metric | Without CascadeFlow | With CascadeFlow |
-|--------|--------------------:|------------------:|
+| Metric | All-flagship | With routing |
+|--------|------------:|-------------:|
 | Cost per review | $0.014 | ~$0.005 |
 | Reviews using expensive model | 100% | ~30% |
 | Quality degradation | — | None (escalation preserves quality) |
@@ -320,16 +328,15 @@ A quick walkthrough of the CodePilot AI experience:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL async connection string | `postgresql+asyncpg://codepilot:codepilot@postgres:5432/codepilot` |
+| `DATABASE_URL` | PostgreSQL async connection string (use Neon in production) | `postgresql+asyncpg://...` |
 | `GROQ_API_KEY` | API key for Groq LLM inference | *(required)* |
-| `HINDSIGHT_URL` | URL of the Hindsight memory server | `http://hindsight:8888` |
-| `JWT_SECRET` | Secret key for signing JWT tokens | *(required — change in production)* |
+| `HINDSIGHT_URL` | Hindsight Cloud base URL | `https://api.hindsight.vectorize.io` |
+| `HINDSIGHT_API_KEY` | API key for Hindsight Cloud — get one free at [hindsight.vectorize.io](https://hindsight.vectorize.io) | *(required for memory)* |
+| `JWT_SECRET` | Secret key for signing JWT tokens — generate with `openssl rand -hex 32` | *(required — change in production)* |
 | `JWT_ALGORITHM` | JWT signing algorithm | `HS256` |
 | `JWT_EXPIRY_HOURS` | JWT token expiration time in hours | `24` |
-| `CASCADEFLOW_BUDGET` | Maximum cost budget per review (USD) | `1.0` |
-| `CASCADEFLOW_MODE` | Routing mode: `enforce` or `monitor` | `enforce` |
-| `CORS_ORIGINS` | Allowed CORS origins (JSON array) | `["http://localhost:3000"]` |
-| `NEXT_PUBLIC_API_URL` | Backend API URL exposed to the frontend | `http://localhost:8000` |
+| `CORS_ORIGINS` | Allowed CORS origins (JSON array) — set to your Vercel URL in production | `["http://localhost:3000"]` |
+| `NEXT_PUBLIC_API_URL` | Backend API URL exposed to the frontend — set to your Render/Railway URL in production | `http://localhost:8000` |
 
 ---
 
